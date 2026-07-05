@@ -49,4 +49,19 @@ extends Resource
 @export var bot_delay := 0.8
 @export var bot_pile_delay := 0.45
 @export var deal_stagger := 0.06
-@export var banner_hold := 1.0
+@export var banner_hold := 0.7
+@export var pop_scale := 1.09
+@export var pop_time := 0.07
+@export var pulse_time := 0.7
+
+@export_group("Fan")
+@export var hand_fan_radius := 1600.0
+@export var hand_select_lift := 48.0
+@export var opp_hand_scale := 0.5
+@export var opp_hand_max_width := 480.0
+@export var opp_hand_step := 60.0
+@export var opp_hand_rot_step := 4.0
+
+@export_group("Shadow")
+@export var shadow_color := Color(0.0, 0.0, 0.0, 0.30)
+@export var shadow_offset := Vector2(0.0, 7.0)

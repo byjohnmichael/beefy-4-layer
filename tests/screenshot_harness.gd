@@ -21,8 +21,17 @@ func _ready() -> void:
 
 	game = load("res://ui/game_screen.tscn").instantiate()
 	add_child(game)
+
+	# Coin flip happens between the deal and the first turn
+	var deadline_coin := Time.get_ticks_msec() + 10000
+	while _find_coin() == null and Time.get_ticks_msec() < deadline_coin:
+		await get_tree().process_frame
+	if _find_coin() != null:
+		await _settle(0.95)
+		await _shot("02-coin-flip.png")
+
 	await _wait_unlocked()
-	await _shot("02-opening-deal.png")
+	await _shot("03-opening-deal.png")
 
 	# Fast-forward until it's my turn with a legal hand play, restarting the
 	# game if it finishes first, so every shot below is guaranteed to land.
@@ -44,7 +53,7 @@ func _ready() -> void:
 		if not _game_over():
 			break
 	await _wait_my_turn()
-	await _shot("03-midgame.png")
+	await _shot("04-midgame.png")
 
 	# Selection highlight + resolution (hand play when available)
 	if not _game_over():
@@ -52,7 +61,7 @@ func _ready() -> void:
 		if move != null and move["type"] == "SELECT_HAND_CARD":
 			await game._run_action(move)
 			await _wait_unlocked()
-			await _shot("04-selection-highlight.png")
+			await _shot("05-selection-highlight.png")
 			var pile_sel: Variant = SimBot.get_bot_pile_selection(game.state, Callable(), "P1")
 			if pile_sel != null:
 				await game._run_action(pile_sel)
@@ -78,7 +87,7 @@ func _ready() -> void:
 		await _wait_unlocked()
 		game._run_action({"type": "SELECT_PILE", "pileIndex": randi() % 4})
 		await _settle(0.42)  # mid reveal pause
-		await _shot("05-gamble-reveal.png")
+		await _shot("06-gamble-reveal.png")
 		await _wait_unlocked()
 		break
 
@@ -88,7 +97,7 @@ func _ready() -> void:
 	if not _game_over() and game.state.deck.size() > 0 and game.state.selected_card == null:
 		game._on_deck_tapped()
 		await _settle(0.25)
-		await _shot("06-deck-prompt.png")
+		await _shot("07-deck-prompt.png")
 		game._hide_deck_prompt()
 
 	# Play to completion
@@ -98,12 +107,19 @@ func _ready() -> void:
 		await _advance_one()
 	Engine.time_scale = 1.0
 	await _settle(0.4)
-	await _shot("07-end-overlay.png")
+	await _shot("08-end-overlay.png")
 
 	print("HARNESS DONE winner=%s stalemate=%s transitions=%d" % [
 		str(game.state.winner), str(_hit_stalemate), game.state.log.size()
 	])
 	get_tree().quit(0)
+
+
+func _find_coin() -> Node:
+	for child in game._hud_layer.get_children():
+		if child is CoinView:
+			return child
+	return null
 
 
 func _game_over() -> bool:

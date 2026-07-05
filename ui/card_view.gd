@@ -46,10 +46,18 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _draw() -> void:
+	_draw_shadow()
 	if face_up and card != null:
 		_draw_face()
 	else:
 		_draw_back()
+
+
+func _draw_shadow() -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = tokens.shadow_color
+	style.set_corner_radius_all(int(tokens.card_radius + 2.0))
+	draw_style_box(style, Rect2(tokens.shadow_offset, size))
 
 
 func _draw_face() -> void:

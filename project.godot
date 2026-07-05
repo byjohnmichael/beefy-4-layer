@@ -7,6 +7,10 @@ config/name="Beefy 4 Layer"
 run/main_scene="res://ui/title_screen.tscn"
 config/features=PackedStringArray("4.6")
 
+[autoload]
+
+Sfx="*res://audio/sfx.gd"
+
 [display]
 
 window/size/viewport_width=1080

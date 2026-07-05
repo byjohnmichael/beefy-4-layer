@@ -8,8 +8,8 @@ extends Control
 # --- Layout (base resolution 1080x1920) ---
 const W := 1080.0
 const H := 1920.0
-const OPP_BADGE_Y := 46.0
-const OPP_ROW_Y := 140.0
+const OPP_HAND_CENTER_Y := 64.0
+const OPP_ROW_Y := 168.0
 const MID_Y := 560.0
 const MID_START_X := 84.0
 const MID_GAP := 28.0
@@ -33,7 +33,7 @@ var _hud_layer: Control
 var _deck_view: CardView
 var _deck_slot: PileSlot
 var _deck_label: Label
-var _opp_badge: Label
+var _opp_count: Label
 var _turn_label: Label
 var _turn_bar_top: ColorRect
 var _turn_bar_bottom: ColorRect
@@ -114,11 +114,12 @@ func _build_slots() -> void:
 
 
 func _build_hud() -> void:
-	_opp_badge = _make_label("", tokens.font_size_hud, tokens.hud_text)
-	_opp_badge.position = Vector2(0, OPP_BADGE_Y)
-	_opp_badge.size = Vector2(W, 50)
-	_opp_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_hud_layer.add_child(_opp_badge)
+	_opp_count = _make_label("", tokens.font_size_hud, tokens.hud_text_dim)
+	_opp_count.position = Vector2(
+		W / 2.0 + tokens.opp_hand_max_width / 2.0 + 46.0, OPP_HAND_CENTER_Y - 26.0
+	)
+	_opp_count.size = Vector2(160, 50)
+	_hud_layer.add_child(_opp_count)
 
 	_deck_label = _make_label("", tokens.font_size_log, tokens.hud_text_dim)
 	_deck_label.position = Vector2(_deck_pos().x, _deck_pos().y + tokens.card_size.y + 10)
@@ -127,7 +128,7 @@ func _build_hud() -> void:
 	_hud_layer.add_child(_deck_label)
 
 	_turn_label = _make_label("", tokens.font_size_hud, tokens.accent)
-	_turn_label.position = Vector2(0, HAND_Y + tokens.card_size.y + 26)
+	_turn_label.position = Vector2(0, HAND_Y + tokens.card_size.y + 40)
 	_turn_label.size = Vector2(W, 50)
 	_turn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hud_layer.add_child(_turn_label)
@@ -145,6 +146,14 @@ func _build_hud() -> void:
 	_turn_bar_bottom.size = Vector2(W, 10)
 	_turn_bar_bottom.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud_layer.add_child(_turn_bar_bottom)
+
+	# Subtle breathing pulse on whichever turn bar is visible
+	for bar: ColorRect in [_turn_bar_top, _turn_bar_bottom]:
+		var tw := create_tween().set_loops()
+		tw.tween_property(bar, "modulate:a", 0.45, tokens.pulse_time) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tw.tween_property(bar, "modulate:a", 1.0, tokens.pulse_time) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 
 
 func _build_deck_prompt() -> void:
@@ -247,6 +256,7 @@ func _make_button(text: String) -> Button:
 		style.content_margin_top = 16
 		style.content_margin_bottom = 16
 		button.add_theme_stylebox_override(state_name, style)
+	button.pressed.connect(func() -> void: Sfx.play("tap"))
 	return button
 
 
@@ -276,28 +286,55 @@ func _pile_pos(i: int) -> Vector2:
 	return Vector2(MID_START_X + (i + 1) * (_card_w() + MID_GAP), MID_Y)
 
 
-func _opp_badge_pos() -> Vector2:
-	return Vector2(W / 2.0 - _card_w() / 2.0, 20.0)
+## Top-left position for a full-size card whose visual center sits at the
+## middle of the opponent's hand fan (used as a fly target).
+func _opp_hand_anchor() -> Vector2:
+	return Vector2(W / 2.0, OPP_HAND_CENTER_Y) - tokens.card_size / 2.0
 
 
-func _hand_positions(count: int) -> Array:
-	var positions: Array = []
+## Fanned layout for my hand: cards sit on an arc, rotated along it.
+## Returns [{ "pos": Vector2, "rot": float_degrees }].
+func _hand_layout(count: int) -> Array:
+	var out: Array = []
 	if count == 0:
-		return positions
+		return out
 	var w := _card_w()
 	var spacing := w + 18.0
 	if count > 1:
 		spacing = minf(spacing, (HAND_MAX_WIDTH - w) / (count - 1))
-	var total := w + spacing * (count - 1)
-	var start_x := (W - total) / 2.0
+	var radius: float = tokens.hand_fan_radius
 	for i in count:
-		positions.append(Vector2(start_x + spacing * i, HAND_Y))
-	return positions
+		var t := i - (count - 1) / 2.0
+		var ang := t * spacing / radius  # radians along the arc
+		var cx := W / 2.0 + sin(ang) * radius
+		var cy := HAND_Y + (1.0 - cos(ang)) * radius
+		out.append({"pos": Vector2(cx - w / 2.0, cy), "rot": rad_to_deg(ang)})
+	return out
 
 
-func _my_hand_end_pos(post_hand_size: int) -> Vector2:
-	var positions := _hand_positions(post_hand_size)
-	return positions.back() if not positions.is_empty() else Vector2(W / 2.0, HAND_Y)
+## Small face-down fan for the bot's hand, centered at the top.
+func _opp_hand_layout(count: int) -> Array:
+	var out: Array = []
+	if count == 0:
+		return out
+	var step: float = tokens.opp_hand_step
+	if count > 1:
+		step = minf(step, tokens.opp_hand_max_width / (count - 1))
+	for i in count:
+		var t := i - (count - 1) / 2.0
+		var center := Vector2(W / 2.0 + t * step, OPP_HAND_CENTER_Y)
+		out.append({
+			"pos": center - tokens.card_size / 2.0,
+			"rot": t * tokens.opp_hand_rot_step,
+		})
+	return out
+
+
+func _my_hand_end_target(post_hand_size: int) -> Dictionary:
+	var layout := _hand_layout(post_hand_size)
+	if layout.is_empty():
+		return {"pos": Vector2(W / 2.0, HAND_Y), "rot": 0.0}
+	return layout.back()
 
 
 # ---------------------------------------------------------------- game flow
@@ -318,7 +355,7 @@ func _start_new_game() -> void:
 	var first := "P1" if randi() % 2 == 0 else "P2"
 	state = SimReducer.reduce(state, {"type": "SET_FIRST_PLAYER", "player": first})
 	_sync_board()
-	await _show_banner("You go first!" if first == "P1" else "Bot goes first")
+	await _animate_coin_flip(first == "P1")
 	_input_locked = false
 	_kick_bot()
 
@@ -357,7 +394,7 @@ func _bot_loop() -> void:
 		await get_tree().create_timer(tokens.bot_delay).timeout
 		var move: Variant = SimBot.get_bot_move(state, Callable(), "P2")
 		if move == null:
-			_show_overlay("Stalemate - no moves left")
+			_show_overlay("Stalemate - no moves left", "fail")
 			break
 		await _do_action(move)
 		var pile_sel: Variant = SimBot.get_bot_pile_selection(state, Callable(), "P2")
@@ -439,6 +476,7 @@ func _on_deck_tapped() -> void:
 		return
 	if state.selected_card != null:
 		_run_action({"type": "CLEAR_SELECTIONS"})
+	Sfx.play("tap")
 	_deck_prompt.visible = not _deck_prompt.visible
 
 
@@ -486,11 +524,23 @@ func _spawn(card: SimCard, face_up: bool, pos: Vector2) -> CardView:
 	return view
 
 
-## Reconcile every card view with the current state (positions, faces,
-## highlights, HUD). Small position diffs tween smoothly.
+## Reconcile every card view with the current state (positions, rotations,
+## scales, faces, highlights, HUD). Small diffs tween smoothly.
 func _sync_board() -> void:
 	var specs: Dictionary = {}
 	var order: Array = []
+
+	# Opponent's hand: small face-down fan at the top
+	var opp_hand: Array = _p("P2").hand
+	var opp_layout := _opp_hand_layout(opp_hand.size())
+	for i in opp_hand.size():
+		var card: SimCard = opp_hand[i]
+		specs[card.id] = {
+			"card": card, "pos": opp_layout[i]["pos"], "rot": opp_layout[i]["rot"],
+			"scale": Vector2.ONE * tokens.opp_hand_scale,
+			"face_up": false, "selected": false, "dim": false, "interactive": false,
+		}
+		order.append(card.id)
 
 	# Center piles: top two cards for depth
 	for p in 4:
@@ -526,15 +576,19 @@ func _sync_board() -> void:
 			}
 			order.append(card.id)
 
-	# My hand
+	# My hand: fanned arc
 	var hand: Array = _p("P1").hand
-	var hand_pos := _hand_positions(hand.size())
+	var layout := _hand_layout(hand.size())
 	for i in hand.size():
 		var card: SimCard = hand[i]
 		var selected := _is_selected("hand", i)
+		var pos: Vector2 = layout[i]["pos"]
+		if selected:
+			pos += Vector2(0, -tokens.hand_select_lift)
 		specs[card.id] = {
 			"card": card,
-			"pos": hand_pos[i] + (Vector2(0, -40) if selected else Vector2.ZERO),
+			"pos": pos,
+			"rot": layout[i]["rot"],
 			"face_up": true,
 			"selected": selected,
 			"dim": SimRules.get_legal_piles(card, state.center_piles).is_empty(),
@@ -558,18 +612,30 @@ func _sync_board() -> void:
 			card_views.erase(id)
 	for id: String in specs:
 		var spec: Dictionary = specs[id]
+		var target_pos: Vector2 = spec["pos"]
+		var target_rot: float = spec.get("rot", 0.0)
+		var target_scale: Vector2 = spec.get("scale", Vector2.ONE)
 		var view: CardView = card_views.get(id)
 		if view == null:
-			view = _spawn(spec["card"], spec["face_up"], spec["pos"])
-		if view.position.distance_to(spec["pos"]) > 1.0:
-			var tw := create_tween()
-			tw.tween_property(view, "position", spec["pos"], tokens.dur_fast) \
+			view = _spawn(spec["card"], spec["face_up"], target_pos)
+			view.rotation_degrees = target_rot
+			view.scale = target_scale
+		elif (
+			view.position.distance_to(target_pos) > 1.0
+			or absf(view.rotation_degrees - target_rot) > 0.5
+			or view.scale.distance_to(target_scale) > 0.01
+		):
+			var tw := create_tween().set_parallel(true)
+			tw.tween_property(view, "position", target_pos, tokens.dur_fast) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			tw.tween_property(view, "rotation_degrees", target_rot, tokens.dur_fast) \
+				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+			tw.tween_property(view, "scale", target_scale, tokens.dur_fast) \
 				.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		view.face_up = spec["face_up"]
 		view.selected = spec["selected"]
 		view.dimmed = spec["dim"]
 		view.interactive = spec["interactive"]
-		view.scale = Vector2.ONE
 	for id: String in order:
 		if card_views.has(id):
 			(card_views[id] as CardView).move_to_front()
@@ -587,7 +653,7 @@ func _sync_board() -> void:
 			and _p("P1").face_down.all(func(c: Variant) -> bool: return c == null)
 		)
 		if stuck:
-			_show_overlay("Stalemate - no moves left")
+			_show_overlay("Stalemate - no moves left", "fail")
 
 
 func _sync_highlights() -> void:
@@ -608,21 +674,30 @@ func _sync_highlights() -> void:
 func _sync_hud() -> void:
 	_deck_view.visible = not state.deck.is_empty()
 	_deck_label.text = str(state.deck.size())
-	_opp_badge.text = "Bot · %d card%s in hand" % [
-		_p("P2").hand.size(), "" if _p("P2").hand.size() == 1 else "s"
-	]
+	_opp_count.text = "×%d" % _p("P2").hand.size()
+	_opp_count.visible = _p("P2").hand.size() > 0
 	var my_turn := state.winner == null and state.current_player == "P1"
 	var bot_turn := state.winner == null and state.current_player == "P2"
 	_turn_bar_bottom.visible = my_turn
 	_turn_bar_top.visible = bot_turn
 	_turn_label.text = "Your turn" if my_turn else ("Bot is thinking..." if bot_turn else "")
 	if state.winner != null:
-		_show_overlay("You win!" if state.winner == "P1" else "Bot wins!")
+		_show_overlay(
+			"You win!" if state.winner == "P1" else "Bot wins!",
+			"win" if state.winner == "P1" else "lose"
+		)
 
 
-func _show_overlay(text: String) -> void:
+func _show_overlay(text: String, sound_name := "") -> void:
+	if _overlay.visible:
+		return
 	_overlay_label.text = text
 	_overlay.visible = true
+	_overlay.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(_overlay, "modulate:a", 1.0, tokens.dur_slow)
+	if sound_name != "":
+		Sfx.play(sound_name)
 
 
 func _show_banner(text: String) -> void:
@@ -637,15 +712,29 @@ func _show_banner(text: String) -> void:
 
 # ---------------------------------------------------------------- animations
 
-func _fly(view: CardView, to: Vector2, duration: float) -> void:
+## Fly a card view to a target, straightening rotation and scale in flight.
+## `pop` adds a landing scale-pop and the "place" sound (for pile landings).
+func _fly(view: CardView, to: Vector2, duration: float, rot := 0.0, pop := false) -> void:
 	view.move_to_front()
-	var tw := create_tween()
+	var tw := create_tween().set_parallel(true)
 	tw.tween_property(view, "position", to, duration) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(view, "rotation_degrees", rot, duration) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.tween_property(view, "scale", Vector2.ONE, duration) \
+		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	await tw.finished
+	if pop:
+		Sfx.play("place")
+		var tp := create_tween()
+		tp.tween_property(view, "scale", Vector2.ONE * tokens.pop_scale, tokens.pop_time)
+		tp.tween_property(view, "scale", Vector2.ONE, tokens.pop_time + 0.02)
+		await tp.finished
 
 
 func _flip(view: CardView, to_face_up: bool, reveal: SimCard = null) -> void:
+	Sfx.play("flip")
+	var restore_x := view.scale.x  # fan cards are scaled down; keep their scale
 	var tw := create_tween()
 	tw.tween_property(view, "scale:x", 0.0, tokens.dur_fast) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
@@ -656,20 +745,13 @@ func _flip(view: CardView, to_face_up: bool, reveal: SimCard = null) -> void:
 	view.face_up = to_face_up
 	view.queue_redraw()
 	var tw2 := create_tween()
-	tw2.tween_property(view, "scale:x", 1.0, tokens.dur_fast) \
+	tw2.tween_property(view, "scale:x", restore_x, tokens.dur_fast) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	await tw2.finished
 
 
-func _fade_out_and_free(view: CardView) -> void:
-	card_views.erase(view.card.id if view.card != null else "")
-	var tw := create_tween()
-	tw.tween_property(view, "modulate:a", 0.0, tokens.dur_fast)
-	await tw.finished
-	view.queue_free()
-
-
 func _animate_deal() -> void:
+	Sfx.play("shuffle")
 	var items: Array = []
 	for i in 4:
 		items.append({"card": _p("P2").face_down[i], "target": _opp_slot_pos(i), "face": false})
@@ -685,6 +767,7 @@ func _animate_deal() -> void:
 		view.interactive = false
 		var tw := create_tween()
 		tw.tween_interval(k * tokens.deal_stagger)
+		tw.tween_callback(func() -> void: Sfx.play("slide", randf_range(0.92, 1.1), -6.0))
 		tw.tween_property(view, "position", item["target"], tokens.dur_slow) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		if item["face"]:
@@ -698,9 +781,54 @@ func _animate_deal() -> void:
 		await last_tween.finished
 
 
+## Coin flip deciding the first player: a coin flips a few times mid-screen,
+## settles on YOU/BOT, then a short banner confirms it.
+func _animate_coin_flip(you_first: bool) -> void:
+	var coin := CoinView.create(tokens, 240.0)
+	coin.position = Vector2(W / 2.0 - 120.0, 850.0)
+	coin.modulate.a = 0.0
+	_hud_layer.add_child(coin)
+	coin.move_to_front()
+	Sfx.play("coin")
+
+	var fade_in := create_tween()
+	fade_in.tween_property(coin, "modulate:a", 1.0, tokens.dur_fast)
+	await fade_in.finished
+
+	var flips := 5 if (coin.showing_you != you_first) else 6
+	for k in flips:
+		var half := create_tween()
+		half.tween_property(coin, "scale:x", 0.0, 0.07) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		await half.finished
+		coin.showing_you = not coin.showing_you
+		var half2 := create_tween()
+		half2.tween_property(coin, "scale:x", 1.0, 0.07) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+		await half2.finished
+
+	# Settle pop
+	var pop := create_tween()
+	pop.tween_property(coin, "scale", Vector2.ONE * 1.12, tokens.pop_time)
+	pop.tween_property(coin, "scale", Vector2.ONE, tokens.pop_time)
+	await pop.finished
+
+	_show_banner("You go first!" if you_first else "Bot goes first")
+	await get_tree().create_timer(tokens.banner_hold * 0.6).timeout
+	var fade_out := create_tween()
+	fade_out.tween_property(coin, "modulate:a", 0.0, tokens.dur_med)
+	await fade_out.finished
+	coin.queue_free()
+
+
 func _animate_transition(pre: SimState, action: Dictionary) -> void:
 	var acting := pre.current_player
 	match action.get("type", ""):
+		"SELECT_HAND_CARD", "SELECT_FACEDOWN_CARD":
+			if state != pre:
+				Sfx.play("tap")
+			return
+
 		"SELECT_PILE":
 			if state == pre or pre.selected_card == null:
 				return  # reducer no-op (illegal target): selection stays
@@ -720,6 +848,7 @@ func _animate_transition(pre: SimState, action: Dictionary) -> void:
 		"START_DRAW_GAMBLE":
 			if state == pre:
 				return
+			Sfx.play("slide")
 			var card := state.pending_draw_gamble as SimCard
 			var view := _spawn(card, false, _deck_pos())
 			view.selected = true
@@ -746,11 +875,13 @@ func _animate_hand_play(pre: SimState, acting: String, index: int, pile_index: i
 	var card: SimCard = pre.players[acting].hand[index]
 	var view: CardView = card_views.get(card.id)
 	if view == null:
-		# Bot hand cards aren't rendered: fly in from the opponent badge
-		view = _spawn(card, true, _opp_badge_pos())
+		view = _spawn(card, true, _opp_hand_anchor())
 	view.selected = false
 	view.dimmed = false
-	await _fly(view, _pile_pos(pile_index), tokens.dur_med)
+	if acting == "P2":
+		# Reveal the bot's card out of its face-down fan before it flies
+		await _flip(view, true, card)
+	await _fly(view, _pile_pos(pile_index), tokens.dur_med, 0.0, true)
 
 
 func _animate_facedown_gamble(pre: SimState, acting: String, index: int, pile_index: int) -> void:
@@ -766,30 +897,33 @@ func _animate_facedown_gamble(pre: SimState, acting: String, index: int, pile_in
 	var pile: Array = state.center_piles[pile_index]
 	var success := not pile.is_empty() and (pile.back() as SimCard).id == card.id
 	if success:
-		await _fly(view, _pile_pos(pile_index), tokens.dur_med)
+		await _fly(view, _pile_pos(pile_index), tokens.dur_med, 0.0, true)
 	else:
+		Sfx.play("fail")
 		if acting == "P1":
-			await _fly(view, _my_hand_end_pos(_p("P1").hand.size()), tokens.dur_med)
+			var target := _my_hand_end_target(_p("P1").hand.size())
+			await _fly(view, target["pos"], tokens.dur_med, target["rot"])
 		else:
-			await _fly(view, _opp_badge_pos(), tokens.dur_med)
-			await _fade_out_and_free(view)
+			await _fly(view, _opp_hand_anchor(), tokens.dur_med)
 		# Replacement slides from the deck into the slot
 		var replacement: Variant = state.players[acting].face_down[index]
 		if replacement != null:
+			Sfx.play("slide")
 			var new_view := _spawn(replacement, false, _deck_pos())
 			await _fly(new_view, slot_pos, tokens.dur_med)
 	await _maybe_animate_refresh(pre)
 
 
 func _animate_draw_to_hand(pre: SimState, acting: String) -> void:
+	Sfx.play("slide")
 	var card: SimCard = pre.deck[0]
 	var view := _spawn(card, false, _deck_pos())
 	if acting == "P1":
-		await _fly(view, _my_hand_end_pos(_p("P1").hand.size()), tokens.dur_med)
+		var target := _my_hand_end_target(_p("P1").hand.size())
+		await _fly(view, target["pos"], tokens.dur_med, target["rot"])
 		await _flip(view, true)
 	else:
-		await _fly(view, _opp_badge_pos(), tokens.dur_med)
-		await _fade_out_and_free(view)
+		await _fly(view, _opp_hand_anchor(), tokens.dur_med)
 	await _maybe_animate_refresh(pre)
 
 
@@ -805,14 +939,23 @@ func _animate_draw_gamble(pre: SimState, acting: String, pile_index: int) -> voi
 	var pile: Array = state.center_piles[pile_index]
 	var success := not pile.is_empty() and (pile.back() as SimCard).id == card.id
 	if success:
-		await _fly(view, _pile_pos(pile_index), tokens.dur_med)
+		await _fly(view, _pile_pos(pile_index), tokens.dur_med, 0.0, true)
 	else:
+		Sfx.play("fail")
 		if acting == "P1":
-			await _fly(view, _my_hand_end_pos(_p("P1").hand.size()), tokens.dur_med)
+			var target := _my_hand_end_target(_p("P1").hand.size())
+			await _fly(view, target["pos"], tokens.dur_med, target["rot"])
 		else:
-			await _fly(view, _opp_badge_pos(), tokens.dur_med)
-			await _fade_out_and_free(view)
+			await _fly(view, _opp_hand_anchor(), tokens.dur_med)
 	await _maybe_animate_refresh(pre)
+
+
+func _fade_out_and_free(view: CardView) -> void:
+	card_views.erase(view.card.id if view.card != null else "")
+	var tw := create_tween()
+	tw.tween_property(view, "modulate:a", 0.0, tokens.dur_fast)
+	await tw.finished
+	view.queue_free()
 
 
 ## When the transition included a deck refresh, gather the old pile cards
@@ -827,6 +970,7 @@ func _maybe_animate_refresh(pre: SimState) -> void:
 		return
 
 	# Gather old pile views into the deck
+	Sfx.play("shuffle")
 	var last_tween: Tween = null
 	var gathered: Array = []
 	for pile: Array in pre.center_piles:
@@ -855,6 +999,7 @@ func _maybe_animate_refresh(pre: SimState) -> void:
 		var view := _spawn(card, true, _deck_pos())
 		var tw := create_tween()
 		tw.tween_interval(p * tokens.deal_stagger * 2.0)
+		tw.tween_callback(func() -> void: Sfx.play("slide", randf_range(0.92, 1.1), -6.0))
 		tw.tween_property(view, "position", _pile_pos(p), tokens.dur_slow) \
 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 		last_tween = tw
