@@ -499,12 +499,20 @@ func _hide_deck_prompt() -> void:
 	_deck_prompt.visible = false
 
 
-func _is_selected(source: String, index: int) -> bool:
+## Whether `player` currently has this card selected. The sim's selected_card
+## has no player field - it always belongs to state.current_player - so
+## selection visuals must be gated on whose turn it is.
+func _is_selected_by(player: String, source: String, index: int) -> bool:
 	return (
-		state.selected_card != null
+		state.current_player == player
+		and state.selected_card != null
 		and state.selected_card["source"] == source
 		and int(state.selected_card["index"]) == index
 	)
+
+
+func _is_selected(source: String, index: int) -> bool:
+	return _is_selected_by("P1", source, index)
 
 
 # ---------------------------------------------------------------- rendering
@@ -538,7 +546,8 @@ func _sync_board() -> void:
 		specs[card.id] = {
 			"card": card, "pos": opp_layout[i]["pos"], "rot": opp_layout[i]["rot"],
 			"scale": Vector2.ONE * tokens.opp_hand_scale,
-			"face_up": false, "selected": false, "dim": false, "interactive": false,
+			"face_up": false, "selected": _is_selected_by("P2", "hand", i),
+			"dim": false, "interactive": false,
 		}
 		order.append(card.id)
 
@@ -561,7 +570,8 @@ func _sync_board() -> void:
 			var card := fd as SimCard
 			specs[card.id] = {
 				"card": card, "pos": _opp_slot_pos(i), "face_up": false,
-				"selected": false, "dim": false, "interactive": false,
+				"selected": _is_selected_by("P2", "faceDown", i),
+				"dim": false, "interactive": false,
 			}
 			order.append(card.id)
 
