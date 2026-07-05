@@ -1,0 +1,15 @@
+# Godot cache
+.godot/
+
+# Generated conformance vectors (regenerate: cd conformance && npx tsx generate-vectors.mjs)
+tests/vectors/
+
+# Export output (keep the .gdignore marker so Godot skips the dir)
+dist/*
+!dist/.gdignore
+
+# Node
+conformance/node_modules/
+
+# macOS
+.DS_Store

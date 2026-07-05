@@ -1,0 +1,14 @@
+{
+    "name": "beefy-4-layer-conformance",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "generate-vectors": "tsx generate-vectors.mjs",
+        "rng-parity": "node rng-parity.mjs"
+    },
+    "devDependencies": {
+        "tsx": "^4.22.5",
+        "typescript": "~5.9.3"
+    }
+}
