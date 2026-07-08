@@ -3,7 +3,7 @@ extends RefCounted
 ## Mirrors src/game/initialState.ts exactly.
 
 
-static func create_initial_state() -> SimState:
+static func create_initial_state(combo_mode := false) -> SimState:
 	var deck := SimDeck.shuffle(SimDeck.create_deck())
 
 	# Deal 4 face-down cards to each player
@@ -28,4 +28,5 @@ static func create_initial_state() -> SimState:
 
 	state.current_player = "P1"
 	state.log = ["Game started! P1's turn"]
+	state.combo_mode = combo_mode
 	return state

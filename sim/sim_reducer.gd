@@ -36,11 +36,40 @@ static func _pile_top_rank_display(pile_top: SimCard) -> String:
 	return SimRules.get_rank_display(pile_top.rank)
 
 
+## Combo-mode bookkeeping after any successful placement (hand play,
+## face-down flip, or draw-gamble): consume spent tolerance, grow the chain,
+## grant tier boosts. No-op in classic mode.
+static func _combo_on_success(next: SimState, card: SimCard, pile_top: SimCard) -> void:
+	if not next.combo_mode:
+		return
+	if next.tolerance > 1 and not SimRules.can_play(card, pile_top):
+		# The play needed the widened window - tolerance is spent.
+		next.tolerance = 1
+		next.log.append("%s spent tolerance" % next.current_player)
+	next.combo += 1
+	if next.combo % SimRules.COMBO_STEP == 0 and next.tolerance < SimRules.TOLERANCE_MAX:
+		next.tolerance += 1
+		next.log.append(
+			"%s combo x%d - tolerance up to %d" % [
+				next.current_player, next.combo, next.tolerance
+			]
+		)
+
+
+## Ends any running combo: on flips (the climax), failures, turn passes,
+## and timeouts. No-op in classic mode.
+static func _combo_reset(next: SimState) -> void:
+	if not next.combo_mode:
+		return
+	next.combo = 0
+	next.tolerance = 1
+
+
 static func reduce(state: SimState, action: Dictionary) -> SimState:
 	var action_type: String = action.get("type", "")
 	match action_type:
 		"START_GAME", "RESET_GAME":
-			return SimInitialState.create_initial_state()
+			return SimInitialState.create_initial_state(bool(action.get("comboMode", false)))
 
 		"SELECT_HAND_CARD":
 			if state.winner != null:
@@ -51,7 +80,8 @@ static func reduce(state: SimState, action: Dictionary) -> SimState:
 				return state
 			var card: SimCard = player.hand[index]
 			# Check if card has any legal plays
-			if SimRules.get_legal_piles(card, state.center_piles).is_empty():
+			var tol := SimRules.active_tolerance(state)
+			if SimRules.get_legal_piles(card, state.center_piles, tol).is_empty():
 				return state
 			var next := state.clone()
 			next.selected_card = {"source": "hand", "index": index}
@@ -108,6 +138,16 @@ static func reduce(state: SimState, action: Dictionary) -> SimState:
 		"PLAY_DRAW_GAMBLE":
 			return _reduce_play_draw_gamble(state, action)
 
+		"COMBO_TIMEOUT":
+			if not state.combo_mode or state.winner != null:
+				return state
+			if state.combo == 0 and state.tolerance == 1:
+				return state
+			var next := state.clone()
+			_combo_reset(next)
+			next.log.append("%s's combo fizzled" % state.current_player)
+			return next
+
 		"SET_FIRST_PLAYER":
 			var next := state.clone()
 			next.current_player = action.get("player", state.current_player)
@@ -141,7 +181,7 @@ static func _reduce_select_pile(state: SimState, action: Dictionary) -> SimState
 	if source == "hand":
 		# Hand play - must be legal (already checked when selecting)
 		var card: SimCard = player.hand[index] if index < player.hand.size() else null
-		if card == null or not SimRules.can_play(card, pile_top):
+		if card == null or not SimRules.can_play(card, pile_top, SimRules.active_tolerance(state)):
 			return state
 
 		# Success! Place card on pile
@@ -150,6 +190,7 @@ static func _reduce_select_pile(state: SimState, action: Dictionary) -> SimState
 		next_player.hand.remove_at(index)
 		(next.center_piles[pile_index] as Array).append(card)
 		next.selected_card = null
+		_combo_on_success(next, card, pile_top)
 
 		next.log.append(
 			"%s played %s on pile %s (success)" % [
@@ -174,10 +215,10 @@ static func _reduce_select_pile(state: SimState, action: Dictionary) -> SimState
 			return state
 
 		# Reveal the card
-		var is_success := SimRules.can_play(card, pile_top)
+		var is_success := SimRules.can_play(card, pile_top, SimRules.active_tolerance(state))
 
 		if is_success:
-			# Success! Place card on pile, remove from face-down row
+			# Success! Place card on pile, remove from face-down row.
 			var next := state.clone()
 			var next_player: SimPlayerState = next.players[state.current_player]
 			next_player.face_down[index] = null
@@ -185,6 +226,7 @@ static func _reduce_select_pile(state: SimState, action: Dictionary) -> SimState
 			next.selected_card = null
 			next.revealed_card = card
 			next.pending_pile_index = pile_index
+			_combo_on_success(next, card, pile_top)
 
 			next.log.append(
 				"%s flipped %s on pile %s (success)" % [
@@ -229,6 +271,7 @@ static func _reduce_select_pile(state: SimState, action: Dictionary) -> SimState
 			next.selected_card = null
 			next.revealed_card = card
 			next.pending_pile_index = pile_index
+			_combo_reset(next)
 
 			next.log.append(
 				"%s flipped %s on pile %s (fail), moved to hand" % [
@@ -272,6 +315,7 @@ static func _reduce_draw_from_deck(state: SimState) -> SimState:
 	next.deck = new_deck
 	next.current_player = get_opponent(state.current_player)
 	next.selected_card = null
+	_combo_reset(next)
 
 	next.log.append("%s drew a card from deck" % state.current_player)
 	if did_refresh:
@@ -295,7 +339,7 @@ static func _reduce_play_draw_gamble(state: SimState, action: Dictionary) -> Sim
 	# Remove the card from deck (the BACK - where START_DRAW_GAMBLE peeked)
 	var new_deck: Array = state.deck.slice(0, -1)
 
-	var is_success := SimRules.can_play(card, pile_top)
+	var is_success := SimRules.can_play(card, pile_top, SimRules.active_tolerance(state))
 
 	if is_success:
 		# Success! Place card on pile.
@@ -307,6 +351,7 @@ static func _reduce_play_draw_gamble(state: SimState, action: Dictionary) -> Sim
 		next.pending_draw_gamble = null
 		next.revealed_card = card
 		next.pending_pile_index = pile_index
+		_combo_on_success(next, card, pile_top)
 
 		next.log.append(
 			"%s drew and played %s on pile %s (success)" % [
@@ -343,6 +388,7 @@ static func _reduce_play_draw_gamble(state: SimState, action: Dictionary) -> Sim
 		next.pending_draw_gamble = null
 		next.revealed_card = card
 		next.pending_pile_index = pile_index
+		_combo_reset(next)
 
 		next.log.append(
 			"%s drew and played %s on pile %s (fail), moved to hand" % [

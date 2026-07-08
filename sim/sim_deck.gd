@@ -28,9 +28,6 @@ static func create_deck() -> Array:
 		for rank in RANKS:
 			cards.append(SimCard.new("card-%d" % id, rank, suit))
 			id += 1
-	cards.append(SimCard.new("card-%d" % id, "JOKER", ""))
-	id += 1
-	cards.append(SimCard.new("card-%d" % id, "JOKER", ""))
 	return cards
 
 

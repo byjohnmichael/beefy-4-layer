@@ -54,6 +54,14 @@ extends Resource
 @export var pop_time := 0.07
 @export var pulse_time := 0.7
 
+@export_group("Combo")
+@export var combo_window := 4.0
+@export var combo_warm := Color("ff9d3b")
+@export var combo_hot := Color("ff4d4d")
+@export var font_size_combo := 64
+@export var font_size_badge := 56
+@export var combo_bar_size := Vector2(320, 12)
+
 @export_group("Fan")
 @export var hand_fan_radius := 1600.0
 @export var hand_select_lift := 48.0

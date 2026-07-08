@@ -26,9 +26,10 @@ static func get_bot_move(state: SimState, rng := Callable(), player_id := "P2") 
 
 	# Strategy 1: Play from hand if we have legal moves
 	if bot.hand.size() > 0:
+		var tol := SimRules.active_tolerance(state)
 		for i in bot.hand.size():
 			var card: SimCard = bot.hand[i]
-			if SimRules.get_legal_piles(card, state.center_piles).size() > 0:
+			if SimRules.get_legal_piles(card, state.center_piles, tol).size() > 0:
 				return {"type": "SELECT_HAND_CARD", "index": i}
 
 	# Strategy 2: Gamble with face-down card
@@ -70,7 +71,9 @@ static func get_bot_pile_selection(state: SimState, rng := Callable(), player_id
 		var card: SimCard = bot.hand[index] if index < bot.hand.size() else null
 		if card == null:
 			return null
-		var legal := SimRules.get_legal_piles(card, state.center_piles)
+		var legal := SimRules.get_legal_piles(
+			card, state.center_piles, SimRules.active_tolerance(state)
+		)
 		if legal.size() > 0:
 			return {"type": "SELECT_PILE", "pileIndex": legal[0]}
 	else:

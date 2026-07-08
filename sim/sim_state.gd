@@ -17,6 +17,12 @@ var revealed_card: Variant = null  # SimCard | null
 var pending_pile_index: Variant = null  # int | null
 var pending_draw_gamble: Variant = null  # SimCard | null
 
+## Combo mode (docs/combo-spec.md). Fields serialize only when combo_mode is
+## true, keeping classic-mode dicts byte-identical to the TS shape.
+var combo_mode := false
+var combo := 0  # current player's chain length, 0 = no combo running
+var tolerance := 1  # adjacency window; >1 only while a combo has earned it
+
 
 func clone() -> SimState:
 	var c := SimState.new()
@@ -36,6 +42,9 @@ func clone() -> SimState:
 	c.revealed_card = revealed_card
 	c.pending_pile_index = pending_pile_index
 	c.pending_draw_gamble = pending_draw_gamble
+	c.combo_mode = combo_mode
+	c.combo = combo
+	c.tolerance = tolerance
 	return c
 
 
@@ -49,7 +58,7 @@ func to_dict() -> Dictionary:
 		for card: SimCard in pile:
 			p.append(card.to_dict())
 		piles_arr.append(p)
-	return {
+	var out := {
 		"deck": deck_arr,
 		"centerPiles": piles_arr,
 		"players": {
@@ -69,6 +78,11 @@ func to_dict() -> Dictionary:
 			null if pending_draw_gamble == null else (pending_draw_gamble as SimCard).to_dict()
 		),
 	}
+	if combo_mode:
+		out["comboMode"] = true
+		out["combo"] = combo
+		out["tolerance"] = tolerance
+	return out
 
 
 static func from_dict(d: Dictionary) -> SimState:
@@ -100,4 +114,7 @@ static func from_dict(d: Dictionary) -> SimState:
 	s.pending_pile_index = null if ppi == null else int(ppi)
 	var pdg: Variant = d.get("pendingDrawGamble")
 	s.pending_draw_gamble = null if pdg == null else SimCard.from_dict(pdg)
+	s.combo_mode = bool(d.get("comboMode", false))
+	s.combo = int(d.get("combo", 0))
+	s.tolerance = int(d.get("tolerance", 1))
 	return s

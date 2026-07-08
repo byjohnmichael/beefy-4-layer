@@ -42,6 +42,17 @@ var _overlay: Control
 var _overlay_label: Label
 var _banner: Label
 
+# Combo mode HUD (docs/combo-spec.md). The clock lives here, not in the sim:
+# it drains only while the acting player can actually act, and dispatches
+# COMBO_TIMEOUT when it empties.
+var _combo_label: Label
+var _combo_bar: ColorRect
+var _combo_bar_bg: ColorRect
+var _tolerance_badge: Label
+var _combo_time_left := 0.0
+var _shown_combo := 0
+var _shown_tolerance := 1
+
 
 func _ready() -> void:
 	_build_background()
@@ -50,6 +61,7 @@ func _ready() -> void:
 	_hud_layer = _make_layer()
 	_build_slots()
 	_build_hud()
+	_build_combo_hud()
 	_build_deck_prompt()
 	_build_overlay()
 	_build_banner()
@@ -154,6 +166,40 @@ func _build_hud() -> void:
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 		tw.tween_property(bar, "modulate:a", 1.0, tokens.pulse_time) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func _build_combo_hud() -> void:
+	_combo_label = _make_label("", tokens.font_size_combo, tokens.hud_text)
+	_combo_label.position = Vector2(0, 812)
+	_combo_label.size = Vector2(W, 80)
+	_combo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_combo_label.pivot_offset = Vector2(W / 2.0, 40)
+	_combo_label.visible = false
+	_hud_layer.add_child(_combo_label)
+
+	_combo_bar_bg = ColorRect.new()
+	_combo_bar_bg.color = Color(1, 1, 1, 0.12)
+	_combo_bar_bg.position = Vector2((W - tokens.combo_bar_size.x) / 2.0, 904)
+	_combo_bar_bg.size = tokens.combo_bar_size
+	_combo_bar_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_combo_bar_bg.visible = false
+	_hud_layer.add_child(_combo_bar_bg)
+
+	_combo_bar = ColorRect.new()
+	_combo_bar.color = tokens.accent
+	_combo_bar.position = _combo_bar_bg.position
+	_combo_bar.size = tokens.combo_bar_size
+	_combo_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_combo_bar.visible = false
+	_hud_layer.add_child(_combo_bar)
+
+	_tolerance_badge = _make_label("", tokens.font_size_badge, tokens.combo_warm)
+	_tolerance_badge.position = Vector2(W - 240, H - 200)
+	_tolerance_badge.size = Vector2(200, 70)
+	_tolerance_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_tolerance_badge.pivot_offset = Vector2(200, 35)
+	_tolerance_badge.visible = false
+	_hud_layer.add_child(_tolerance_badge)
 
 
 func _build_deck_prompt() -> void:
@@ -330,11 +376,30 @@ func _opp_hand_layout(count: int) -> Array:
 	return out
 
 
+## Hand state indices in display order: sorted by rank value, stable on ties.
+func _hand_display_order(hand: Array) -> Array:
+	var indices: Array = range(hand.size())
+	indices.sort_custom(func(a: int, b: int) -> bool:
+		var va: int = SimRules.RANK_VALUES[(hand[a] as SimCard).rank]
+		var vb: int = SimRules.RANK_VALUES[(hand[b] as SimCard).rank]
+		if va != vb:
+			return va < vb
+		return a < b
+	)
+	return indices
+
+
+## Fan target for the card just appended to my hand (the last state index),
+## at the slot the rank-sorted fan will place it.
 func _my_hand_end_target(post_hand_size: int) -> Dictionary:
 	var layout := _hand_layout(post_hand_size)
 	if layout.is_empty():
 		return {"pos": Vector2(W / 2.0, HAND_Y), "rot": 0.0}
-	return layout.back()
+	var hand: Array = _p("P1").hand
+	var slot := post_hand_size - 1
+	if hand.size() == post_hand_size:
+		slot = _hand_display_order(hand).find(post_hand_size - 1)
+	return layout[slot]
 
 
 # ---------------------------------------------------------------- game flow
@@ -348,7 +413,12 @@ func _start_new_game() -> void:
 	_overlay.visible = false
 	_hide_deck_prompt()
 	SimDeck.set_rng(Callable())  # live games use the engine RNG
-	state = SimReducer.reduce(SimState.new(), {"type": "START_GAME"})
+	state = SimReducer.reduce(
+		SimState.new(), {"type": "START_GAME", "comboMode": GameConfig.combo_mode}
+	)
+	_shown_combo = 0
+	_shown_tolerance = 1
+	_combo_time_left = 0.0
 	_clear_views()
 	_sync_hud()
 	await _animate_deal()
@@ -586,22 +656,27 @@ func _sync_board() -> void:
 			}
 			order.append(card.id)
 
-	# My hand: fanned arc
+	# My hand: fanned arc, displayed in rank order (state order is untouched -
+	# it is part of the TS-conformant state shape)
 	var hand: Array = _p("P1").hand
+	var display_order := _hand_display_order(hand)
 	var layout := _hand_layout(hand.size())
-	for i in hand.size():
+	for k in hand.size():
+		var i: int = display_order[k]
 		var card: SimCard = hand[i]
 		var selected := _is_selected("hand", i)
-		var pos: Vector2 = layout[i]["pos"]
+		var pos: Vector2 = layout[k]["pos"]
 		if selected:
 			pos += Vector2(0, -tokens.hand_select_lift)
 		specs[card.id] = {
 			"card": card,
 			"pos": pos,
-			"rot": layout[i]["rot"],
+			"rot": layout[k]["rot"],
 			"face_up": true,
 			"selected": selected,
-			"dim": SimRules.get_legal_piles(card, state.center_piles).is_empty(),
+			"dim": SimRules.get_legal_piles(
+				card, state.center_piles, SimRules.active_tolerance(state)
+			).is_empty(),
 			"interactive": true,
 		}
 		order.append(card.id)
@@ -652,6 +727,7 @@ func _sync_board() -> void:
 
 	_sync_highlights()
 	_sync_hud()
+	_sync_combo()
 
 	# Stalemate for the human player: non-empty hand with no legal play,
 	# no face-down cards, empty deck (a quirk carried over from the TS engine).
@@ -659,7 +735,9 @@ func _sync_board() -> void:
 		var stuck := (
 			state.deck.is_empty()
 			and not _p("P1").hand.is_empty()
-			and not SimRules.has_legal_hand_play(_p("P1").hand, state.center_piles)
+			and not SimRules.has_legal_hand_play(
+				_p("P1").hand, state.center_piles, SimRules.active_tolerance(state)
+			)
 			and _p("P1").face_down.all(func(c: Variant) -> bool: return c == null)
 		)
 		if stuck:
@@ -674,7 +752,9 @@ func _sync_highlights() -> void:
 		elif state.selected_card != null:
 			if state.selected_card["source"] == "hand":
 				var card: SimCard = _p("P1").hand[int(state.selected_card["index"])]
-				targets = SimRules.get_legal_piles(card, state.center_piles)
+				targets = SimRules.get_legal_piles(
+					card, state.center_piles, SimRules.active_tolerance(state)
+				)
 			else:
 				targets = [0, 1, 2, 3]
 	for p in 4:
@@ -696,6 +776,79 @@ func _sync_hud() -> void:
 			"You win!" if state.winner == "P1" else "Bot wins!",
 			"win" if state.winner == "P1" else "lose"
 		)
+
+
+func _combo_color(tol: int) -> Color:
+	match tol:
+		2:
+			return tokens.combo_warm
+		3:
+			return tokens.combo_hot
+		_:
+			return tokens.hud_text
+
+
+## Reconcile the combo HUD with the state, animating increments and tier-ups.
+func _sync_combo() -> void:
+	if state == null or not state.combo_mode:
+		return
+	var combo := state.combo
+	var tol := state.tolerance
+	var color := _combo_color(tol)
+
+	if combo > 0:
+		_combo_label.text = "COMBO ×%d" % combo
+		_combo_label.add_theme_color_override("font_color", color)
+		_combo_bar.color = color if tol > 1 else tokens.accent
+		_combo_label.visible = true
+		_combo_bar_bg.visible = true
+		_combo_bar.visible = true
+		if combo > _shown_combo:
+			_combo_time_left = tokens.combo_window
+			_combo_bar.size = tokens.combo_bar_size
+			var pop := create_tween()
+			pop.tween_property(
+				_combo_label, "scale", Vector2.ONE * minf(1.1 + combo * 0.04, 1.4),
+				tokens.pop_time
+			)
+			pop.tween_property(_combo_label, "scale", Vector2.ONE, tokens.pop_time + 0.03)
+	else:
+		_combo_label.visible = false
+		_combo_bar_bg.visible = false
+		_combo_bar.visible = false
+		_combo_time_left = 0.0
+
+	if tol > 1:
+		_tolerance_badge.text = "±%d" % tol
+		_tolerance_badge.add_theme_color_override("font_color", color)
+		_tolerance_badge.visible = true
+		if tol > _shown_tolerance:
+			# Tier up! The satisfying flash the chain was building toward.
+			Sfx.play("coin")
+			var flash := create_tween().set_parallel(true)
+			flash.tween_property(_combo_label, "scale", Vector2.ONE * 1.5, tokens.pop_time)
+			flash.tween_property(_tolerance_badge, "scale", Vector2.ONE * 1.6, tokens.pop_time)
+			flash.chain().tween_property(_combo_label, "scale", Vector2.ONE, tokens.dur_med)
+			flash.tween_property(_tolerance_badge, "scale", Vector2.ONE, tokens.dur_med)
+	else:
+		_tolerance_badge.visible = false
+
+	_shown_combo = combo
+	_shown_tolerance = tol
+
+
+## Drains the combo clock. Frozen while animations play or the bot acts, so
+## the human only loses time they could have spent acting.
+func _process(delta: float) -> void:
+	if state == null or not state.combo_mode or state.winner != null:
+		return
+	if state.combo == 0 or _input_locked or _bot_running:
+		return
+	_combo_time_left = maxf(_combo_time_left - delta, 0.0)
+	var fraction := _combo_time_left / tokens.combo_window
+	_combo_bar.size = Vector2(tokens.combo_bar_size.x * fraction, tokens.combo_bar_size.y)
+	if _combo_time_left <= 0.0:
+		_run_action({"type": "COMBO_TIMEOUT"})
 
 
 func _show_overlay(text: String, sound_name := "") -> void:
@@ -876,6 +1029,10 @@ func _animate_transition(pre: SimState, action: Dictionary) -> void:
 			if state == pre:
 				return
 			await _animate_draw_gamble(pre, acting, int(action["pileIndex"]))
+
+		"COMBO_TIMEOUT":
+			if state != pre:
+				Sfx.play("fail", 0.8, -10.0)
 
 		_:
 			return

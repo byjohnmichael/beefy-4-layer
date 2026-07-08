@@ -48,7 +48,7 @@ func _build_content() -> void:
 		SimCard.new("deco-0", "K", "spades"),
 		SimCard.new("deco-1", "A", "hearts"),
 		SimCard.new("deco-2", "2", "clubs"),
-		SimCard.new("deco-3", "JOKER", ""),
+		SimCard.new("deco-3", "Q", "diamonds"),
 	]
 	for i in 4:
 		var view := CardView.create(tokens, ranks[i], true)
@@ -77,8 +77,26 @@ func _build_content() -> void:
 		get_tree().change_scene_to_file("res://ui/game_screen.tscn")
 	)
 	add_child(play)
+
+	var mode := Button.new()
+	mode.add_theme_font_size_override("font_size", tokens.font_size_log)
+	mode.add_theme_color_override("font_color", tokens.accent)
+	mode.add_theme_color_override("font_pressed_color", tokens.accent)
+	mode.add_theme_color_override("font_hover_color", tokens.accent)
+	mode.flat = true
+	var sync_mode_text := func() -> void:
+		mode.text = "mode: COMBO" if GameConfig.combo_mode else "mode: CLASSIC"
+	sync_mode_text.call()
+	mode.pressed.connect(func() -> void:
+		GameConfig.combo_mode = not GameConfig.combo_mode
+		sync_mode_text.call()
+		mode.position.x = (1080.0 - mode.size.x) / 2.0
+	)
+	add_child(mode)
+
 	await get_tree().process_frame
 	play.position = Vector2((1080.0 - play.size.x) / 2.0, 1420.0)
+	mode.position = Vector2((1080.0 - mode.size.x) / 2.0, 1620.0)
 
 	var footer := _make_label(
 		"singleplayer vs bot · godot prototype", tokens.font_size_log, tokens.hud_text_dim
